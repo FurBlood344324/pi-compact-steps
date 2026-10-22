@@ -1,0 +1,82 @@
+# Tag atınca npm'e yayınlar — OIDC trusted publishing, token yok.
+#
+# Kullanım:
+#   npm version patch --no-git-tag-version   # package.json sürümünü artır
+#   git commit -am "0.2.0" && git push
+#   git tag v0.2.0 && git push origin v0.2.0  ← yayını bu tetikler
+#
+# Gereksinim (tek seferlik): npm'de trusted publisher kaydı
+#   npm trust github pi-compact-steps \
+#     --repo FurBlood344324/pi-compact-steps \
+#     --file publish.yml --allow-publish
+#
+# Notlar:
+# - Dosya adı (`publish.yml`) trust kaydındaki `--file` ile BİREBİR aynı olmalı.
+# - `environment:` kullanılırsa trust kaydındaki `--env` ile aynı olmalı; kullanmıyorsak ikisi de boş kalmalı.
+# - Doğrudan publish için `--allow-publish`; yalnız stage'e atmak istersen `--allow-stage-publish` ver ve
+#   aşağıdaki `npm publish` satırını `npm stage publish` yap (onayı elle 2FA ile verirsin).
+
+name: publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write # OIDC: trusted publishing için zorunlu
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Testler bun ile koşuyor (bun:test).
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # OIDC publish için npm >= 11.5.1 gerekir; runner'daki sürüme güvenme.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: npm sürümünü güncelle
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Tag ile package.json sürümü eşleşmeli
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag ile package.json sürümü $pkg uyuşmuyor"
+            exit 1
+          fi
+          echo "sürüm: $pkg"
+
+      - name: Bağımlılıklar (peer paketler dahil)
+        run: bun install
+
+      - name: Testler
+        run: bun test
+
+      - name: npm'e yayınla (OIDC)
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if [[ "$version" == *-* ]]; then
+            tag=next
+          else
+            tag=latest
+          fi
+          echo "yayın: $version (dist-tag: $tag)"
+          npm publish --access public --provenance --tag "$tag"

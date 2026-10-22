@@ -12,6 +12,14 @@
   ],
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FurBlood344324/pi-compact-steps.git"
+  },
+  "homepage": "https://github.com/FurBlood344324/pi-compact-steps#readme",
+  "bugs": {
+    "url": "https://github.com/FurBlood344324/pi-compact-steps/issues"
+  },
   "pi": {
     "extensions": [
       "./extensions/index.ts"

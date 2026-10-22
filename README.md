@@ -80,6 +80,37 @@ part of pi's extension API but are documented thin, so pin your pi version if yo
 - The package declares only `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` as peer
   dependencies; pi supplies both, they are deliberately not bundled.
 
+## Release
+
+Publishing runs in GitHub Actions with **OIDC trusted publishing** — no npm token is stored anywhere.
+A `v*` tag is the only trigger:
+
+```bash
+npm version patch --no-git-tag-version   # bump package.json
+# edit CHANGELOG-ish notes, commit
+git push
+git tag v0.1.1 && git push origin v0.1.1  # ← publishes
+```
+
+The workflow (`.github/workflows/publish.yml`) fails if the tag and `package.json` version disagree,
+runs `bun install && bun test`, then publishes with provenance. Pre-release versions (`-rc.1`) go to
+the `next` dist-tag instead of `latest`.
+
+One-time setup on the npm side (requires npm >= 11.15 and 2FA):
+
+```bash
+npm trust github pi-compact-steps \
+  --repo FurBlood344324/pi-compact-steps \
+  --file publish.yml --allow-publish
+```
+
+`--allow-publish` permits a direct `npm publish`. For a manual 2FA approval step instead, register with
+`--allow-stage-publish` and change the last workflow step to `npm stage publish`; you then run
+`npm stage approve <id>` yourself.
+
+Manual fallback if CI is unavailable: `npm publish --access public --otp=<code>` from a logged-in shell,
+or `npm stage publish` followed by `npm stage approve`.
+
 ## Development
 
 ```bash
