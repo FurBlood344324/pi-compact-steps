@@ -1,6 +1,6 @@
 {
   "name": "pi-compact-steps",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "description": "Claude Code style one-line tool steps for pi: compact call/result rows, ctrl+o expands to pi's own renderer.",
   "keywords": [
     "pi-package",
