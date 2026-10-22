@@ -21,15 +21,15 @@ appended to the transcript until the step finishes.
 ## Install
 
 ```bash
-pi install npm:pi-compact-steps      # once published
-pi install git:github.com/<you>/pi-compact-steps
+pi install npm:pi-compact-steps      # after the npm release
+pi install git:github.com/FurBlood344324/pi-compact-steps
 pi install ./pi-compact-steps        # local checkout
 ```
 
 Or try it for one run without installing anything:
 
 ```bash
-pi -e ./extensions/compact-steps.ts
+pi -e ./extensions/index.ts
 ```
 
 Remove with `pi remove <source>`, reload running sessions with `/reload`.

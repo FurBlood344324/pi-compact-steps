@@ -8,7 +8,7 @@ import compactSteps, {
 	shortPath,
 	stepParts,
 	summaryText,
-} from "../extensions/compact-steps.ts";
+} from "../extensions/index.ts";
 
 const theme = {
 	fg: (_color: string, text: string) => text,

@@ -14,7 +14,7 @@
   "type": "module",
   "pi": {
     "extensions": [
-      "./extensions/compact-steps.ts"
+      "./extensions/index.ts"
     ]
   },
   "files": [
