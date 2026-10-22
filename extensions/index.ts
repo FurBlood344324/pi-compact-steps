@@ -1,31 +1,11 @@
 /**
  * compact-steps — Claude Code style one-line tool steps for pi.
  *
- * WHAT IT DOES
- *  - Draws each tool call as ONE line and its result as ONE summary line
- *    (read → "31 lines", grep → "12 matches", edit → "+4 −2", bash → "8 lines · 1.3s").
- *  - `ctrl+o` (app.tools.expand) or a click expands the row: pi's OWN renderer takes over
- *    (diff, syntax highlight, full output). Press again to collapse.
- *  - While a tool runs, the status line above the editor shows that step as a single line,
- *    so the transcript does not grow while waiting.
+ * View only: tool behavior, results and model context are untouched. `ctrl+o` expands a row and
+ * hands it back to pi's own renderer. Tools with their own renderer are left alone.
  *
- * WHY
- *  - The default tool block uses box padding plus a 5–20 line preview. In long sessions the
- *    transcript becomes unreadable; the detail is still one keypress away.
- *
- * RULES
- *  - View only: tool behavior, results and model context are unchanged.
- *  - Tools with their own renderers (Agent, codemode, question, mcp…) are left alone; only known
- *    file/shell tools and "bare" tools without a renderer are compacted.
- *  - In the expanded view pi's own renderer is used, we never interfere.
- *
- * CONFIG (environment variables, all optional)
- *  - COMPACT_STEPS_TOOLS="read,bash,grep"  restrict/override which tool names are compacted.
- *  - COMPACT_STEPS_GLYPHS="⏺,⎿"            call/result glyphs (font fallback).
- *  - COMPACT_STEPS_THINKING_LABEL="…"      opt-in: replace the hidden-thinking block label.
- *    Unset by default: this extension never changes the thinking block on its own.
- *
- * Disable: `pi remove` the package, or delete this file → `/reload`.
+ * Optional environment variables: COMPACT_STEPS_TOOLS, COMPACT_STEPS_GLYPHS,
+ * COMPACT_STEPS_THINKING_LABEL (unset by default; never changes the thinking block on its own).
  */
 import { homedir } from "node:os";
 import { isAbsolute } from "node:path";
@@ -44,17 +24,13 @@ import {
 export type ToolRenderContext = Parameters<NonNullable<ToolRenderers["renderCall"]>>[2];
 import { type Component, Text, truncateToWidth } from "@earendil-works/pi-tui";
 
-/** Step glyphs (Claude Code's). Overridable via COMPACT_STEPS_GLYPHS. */
+/** Claude Code glyphs, overridable via COMPACT_STEPS_GLYPHS. */
 const DEFAULT_GLYPHS = { bullet: "⏺", result: "⎿" };
 
 /** Cap for argument/command summaries (characters). Line width clipping is applied on top. */
 const MAX_DETAIL = 100;
 
-/**
- * Default set of compacted tools. The shell aliases (`bash_exec`, `shell`, `glob`) are names used by
- * other hosts and cost nothing here; pi itself uses `bash`, `powershell` and `grep`/`find`/`ls`.
- * Tools outside this set are still compacted when they have no renderer of their own.
- */
+/** Default compacted tools. Tools outside this set are still compacted when they have no renderer. */
 const DEFAULT_TOOLS = [
 	"read",
 	"write",
@@ -92,10 +68,7 @@ const COMPACT_TOOLS = new Set(envList("COMPACT_STEPS_TOOLS") ?? DEFAULT_TOOLS);
 /** Opt-in only: an unset value leaves the hidden-thinking block untouched. */
 const THINKING_LABEL = process.env.COMPACT_STEPS_THINKING_LABEL?.trim() || undefined;
 
-// ---------------------------------------------------------------------------
-// Single-line component: renders one line no matter what, clipped to the width,
-// honoring the outputPad the row would get from pi's default shell.
-// ---------------------------------------------------------------------------
+// Single line, clipped to width, honoring the outputPad pi's default shell would add.
 export class StepLine implements Component {
 	text = "";
 	pad: number;
@@ -122,9 +95,6 @@ export class StepLine implements Component {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 export function str(value: unknown): string {
 	return typeof value === "string" ? value : "";
 }
@@ -228,7 +198,7 @@ export function stepParts(toolName: string, args: any, cwd: string): Step {
 
 export function callLine(toolName: string, args: any, theme: any, ctx: ToolRenderContext): string {
 	const step = stepParts(toolName, args, ctx.cwd);
-	// The bullet carries state: running → warning, error → error, done → accent.
+	// Bullet carries state: running → warning, error → error, done → accent.
 	const bulletColor = ctx.isError ? "error" : ctx.isPartial ? "warning" : "accent";
 	let line = `${theme.fg(bulletColor, glyphs.bullet)} ${theme.fg("toolTitle", theme.bold(step.label))}`;
 	if (step.detail) line += ` ${theme.fg("accent", step.detail)}`;
@@ -295,10 +265,7 @@ export function resultLine(toolName: string, result: any, theme: any, ctx: ToolR
 	return `${glyph} ${theme.fg(tone, summary)}`;
 }
 
-// ---------------------------------------------------------------------------
-// Per-row state: compact components and pi-renderer components are kept APART,
-// so toggling with ctrl+o never mixes components or state between the two views.
-// ---------------------------------------------------------------------------
+// Compact and pi-renderer components are kept apart so ctrl+o never mixes components or state.
 type RowState = {
 	compactCall?: StepLine;
 	compactResult?: StepLine;
@@ -354,7 +321,6 @@ function fullOutputComponent(result: any, theme: any, pad: number): Component {
 	return new Text(`\n${lines}`, pad, 0);
 }
 
-// ---------------------------------------------------------------------------
 export default function (pi: ExtensionAPI) {
 	pi.registerToolRenderer((toolName, next) => {
 		const base = next();
@@ -362,7 +328,7 @@ export default function (pi: ExtensionAPI) {
 		if (!COMPACT_TOOLS.has(toolName) && hasOwnRenderers) return undefined;
 
 		return {
-			// We draw our own frame: no box padding/background → 1–2 lines per step.
+			// Own frame: no box padding, so a step is one or two lines.
 			renderShell: "self",
 
 			renderCall(args, theme, ctx) {
@@ -394,7 +360,7 @@ export default function (pi: ExtensionAPI) {
 		};
 	});
 
-	// Opt-in: shorten the label of the collapsed thinking block (ctrl+t / app.thinking.toggle expands it).
+	// Opt-in; ctrl+t expands the block.
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		if (!THINKING_LABEL) return;
@@ -402,10 +368,9 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setHiddenThinkingLabel(THINKING_LABEL);
 	});
 
-	// Live one-line notification: the status line shows the running step instead of growing the transcript.
 	pi.on("tool_execution_start", (event, ctx) => {
 		if (ctx.mode !== "tui" || !ctx.hasUI) return;
-		if (event.parentToolCallId) return; // nested calls should not overwrite the parent step
+		if (event.parentToolCallId) return; // nested call: keep the parent step
 		const step = stepParts(event.toolName, event.args, ctx.cwd);
 		const detail = step.detail ? ` ${step.detail}` : "";
 		ctx.ui.setWorkingMessage(`${glyphs.bullet} ${step.label}${detail}  ·  ${expandHint()}`);
