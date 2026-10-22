@@ -1,0 +1,33 @@
+{
+  "name": "pi-compact-steps",
+  "version": "0.1.0",
+  "description": "Claude Code style one-line tool steps for pi: compact call/result rows, ctrl+o expands to pi's own renderer.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "tui",
+    "transcript",
+    "compact"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./extensions/compact-steps.ts"
+    ]
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}
