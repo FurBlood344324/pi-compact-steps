@@ -6,6 +6,7 @@ import compactSteps, {
 	durationSuffix,
 	resultLine,
 	shortPath,
+	shouldCompact,
 	stepParts,
 	summaryText,
 } from "../extensions/index.ts";
@@ -75,12 +76,28 @@ describe("stepParts", () => {
 		});
 	});
 
-	test("unknown tools fall back to the first string argument", () => {
+	test("codemode shows the first real statement, not the @options comment", () => {
+		const code = '// @options: {"models":true}\n\nconst files = await tools.ls({ path: "src" });\nfiles.length';
+		expect(stepParts("codemode", { code }, ctx().cwd)).toEqual({
+			label: "codemode",
+			detail: 'const files = await tools.ls({ path: "src" });',
+			note: "",
+		});
+		expect(stepParts("codemode", {}, ctx().cwd).detail).toBe("...");
+	});
+
+	test("unknown tools fall back to the first string argument, then to JSON args", () => {
 		expect(stepParts("mcp_thing", { query: "hello" }, ctx().cwd)).toEqual({
 			label: "mcp_thing",
 			detail: "hello",
 			note: "",
 		});
+		expect(stepParts("mcp_thing", { limit: 5, filter: { open: true } }, ctx().cwd)).toEqual({
+			label: "mcp_thing",
+			detail: '{"limit":5,"filter":{"open":true}}',
+			note: "",
+		});
+		expect(stepParts("mcp_thing", {}, ctx().cwd).detail).toBe("");
 	});
 });
 
@@ -112,6 +129,23 @@ describe("summaryText", () => {
 	test("errors win over every other summary", () => {
 		expect(summaryText("bash", result("boom\ntrace"), ctx({ isError: true }))).toBe("boom");
 	});
+
+	test("codemode counts nested calls, drops the script header and adds cost", () => {
+		const calls = [
+			{ name: "read", status: "ok" },
+			{ name: "grep", status: "ok" },
+			{ name: "models.classify", status: "ok", cost: 0.0004 },
+		];
+		const text = "Script completed\nWall time 0.4 seconds\nOutput:\na\nb";
+		expect(summaryText("codemode", result(text, { calls }), ctx({ durationMs: 420 }))).toBe(
+			"3 calls · 2 lines · $0.00040 · 420ms",
+		);
+		// A failed nested call is surfaced even when the script itself succeeded.
+		expect(summaryText("codemode", result(text, { calls: [{ status: "error" }] }), ctx())).toBe(
+			"1 call · 1 failed · 2 lines",
+		);
+		expect(summaryText("codemode", result("", { calls: [] }), ctx())).toBe("no output");
+	});
 });
 
 describe("line rendering", () => {
@@ -123,6 +157,12 @@ describe("line rendering", () => {
 	test("running and error states change tone only", () => {
 		expect(resultLine("bash", result(""), theme, ctx({ isPartial: true }))).toBe("⎿ running…");
 		expect(resultLine("bash", result(""), theme, ctx())).toBe("⎿ no output");
+	});
+
+	test("a running codemode row already counts its nested calls", () => {
+		expect(resultLine("codemode", result("", { calls: [{ status: "ok" }, { status: "running" }] }), theme, ctx({ isPartial: true }))).toBe(
+			"⎿ 2 calls · running…",
+		);
 	});
 
 	test("StepLine renders exactly one clipped line and honors outputPad", () => {
@@ -145,29 +185,61 @@ describe("line rendering", () => {
 	});
 });
 
+function resolverFor() {
+	let resolver: any;
+	const handlers: Record<string, Function> = {};
+	const pi = {
+		registerToolRenderer: (fn: any) => {
+			resolver = fn;
+		},
+		on: (name: string, fn: Function) => {
+			handlers[name] = fn;
+		},
+		getSettings: () => ({}),
+	} as any;
+	compactSteps(pi);
+	return { resolver, handlers };
+}
+
 describe("registration", () => {
 	test("compacts bare and file/shell tools, leaves custom-rendered tools alone", () => {
-		let resolver: any;
-		const handlers: Record<string, Function> = {};
-		const pi = {
-			registerToolRenderer: (fn: any) => {
-				resolver = fn;
-			},
-			on: (name: string, fn: Function) => {
-				handlers[name] = fn;
-			},
-			getSettings: () => ({}),
-		} as any;
-		compactSteps(pi);
+		const { resolver, handlers } = resolverFor();
 
 		const builtIn = { renderCall: () => ({}) as any, renderResult: () => ({}) as any };
 		expect(resolver("read", () => builtIn).renderShell).toBe("self");
 		expect(resolver("mcp_thing", () => undefined).renderShell).toBe("self");
 		expect(resolver("agent", () => builtIn)).toBeUndefined();
+		expect(resolver("question", () => builtIn)).toBeUndefined();
+
+		// Tools with their own renderer are compacted too; ctrl+o still hands back to that renderer.
+		expect(resolver("codemode", () => builtIn).renderShell).toBe("self");
+		expect(resolver("mcp__jira__search", () => builtIn).renderShell).toBe("self");
 
 		const renderers = resolver("read", () => builtIn);
 		const call = renderers.renderCall({ path: "/home/user/work/a.ts" }, theme, ctx());
 		expect(call.render(80)[0]).toBe(" ⏺ read a.ts");
 		expect(handlers.session_start).toBeDefined();
+	});
+
+	test("shouldCompact keeps renderer-less tools and honors the keep list", () => {
+		expect(shouldCompact("bash", true)).toBe(true);
+		expect(shouldCompact("codemode", true)).toBe(true);
+		expect(shouldCompact("agent", true)).toBe(false);
+		expect(shouldCompact("agent", false)).toBe(true);
+	});
+
+	test("an expanded row hands the call back to the tool's own renderer", () => {
+		const { resolver } = resolverFor();
+		const baseCall = { render: () => ["BASE"] };
+		const baseResult = { render: () => ["BASE"] };
+		const base = { renderCall: () => baseCall, renderResult: () => baseResult };
+		const renderers = resolver("codemode", () => base);
+
+		const collapsed = renderers.renderCall({ code: "1" }, theme, ctx());
+		expect(collapsed.render(80)[0]).toBe(" ⏺ codemode 1");
+		expect(renderers.renderCall({ code: "1" }, theme, ctx({ expanded: true }))).toBe(baseCall);
+		expect(renderers.renderResult(result("x"), { expanded: true }, theme, ctx({ expanded: true }))).toBe(
+			baseResult,
+		);
 	});
 });

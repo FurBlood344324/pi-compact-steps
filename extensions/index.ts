@@ -2,9 +2,10 @@
  * compact-steps — Claude Code style one-line tool steps for pi.
  *
  * View only: tool behavior, results and model context are untouched. `ctrl+o` expands a row and
- * hands it back to pi's own renderer. Tools with their own renderer are left alone.
+ * hands it back to pi's own renderer. Every tool is compacted, including ones with their own
+ * renderer (codemode, mcp), except a small keep list whose own row already carries state.
  *
- * Optional environment variables: COMPACT_STEPS_TOOLS, COMPACT_STEPS_GLYPHS,
+ * Optional environment variables: COMPACT_STEPS_TOOLS, COMPACT_STEPS_KEEP, COMPACT_STEPS_GLYPHS,
  * COMPACT_STEPS_THINKING_LABEL (unset by default; never changes the thinking block on its own).
  */
 import { homedir } from "node:os";
@@ -30,20 +31,11 @@ const DEFAULT_GLYPHS = { bullet: "⏺", result: "⎿" };
 /** Cap for argument/command summaries (characters). Line width clipping is applied on top. */
 const MAX_DETAIL = 100;
 
-/** Default compacted tools. Tools outside this set are still compacted when they have no renderer. */
-const DEFAULT_TOOLS = [
-	"read",
-	"write",
-	"edit",
-	"bash",
-	"bash_exec",
-	"shell",
-	"powershell",
-	"grep",
-	"find",
-	"glob",
-	"ls",
-];
+/**
+ * Tools whose own collapsed row already carries state a one-liner would drop: subagent rows show
+ * model/turns/tokens/cost, question rows show the options to pick from.
+ */
+const DEFAULT_KEEP = ["agent", "question"];
 
 function envList(name: string): string[] | undefined {
 	const raw = process.env[name];
@@ -63,7 +55,21 @@ const glyphs = (() => {
 	};
 })();
 
-const COMPACT_TOOLS = new Set(envList("COMPACT_STEPS_TOOLS") ?? DEFAULT_TOOLS);
+/** Set: this is the whole allow-list. Unset: everything is compacted except the keep list. */
+const EXPLICIT_TOOLS = envList("COMPACT_STEPS_TOOLS");
+
+/** An explicitly set variable wins, even when empty: `COMPACT_STEPS_KEEP=` compacts every tool. */
+const KEEP_TOOLS = new Set("COMPACT_STEPS_KEEP" in process.env ? (envList("COMPACT_STEPS_KEEP") ?? []) : DEFAULT_KEEP);
+
+/**
+ * Renderer-less tools are always compacted: their default pi row is a boxed block, and nothing in it
+ * is lost by the one-liner. Own-renderer tools are compacted too unless they are on the keep list.
+ */
+export function shouldCompact(toolName: string, hasOwnRenderers: boolean): boolean {
+	if (!hasOwnRenderers) return true;
+	if (EXPLICIT_TOOLS) return EXPLICIT_TOOLS.includes(toolName);
+	return !KEEP_TOOLS.has(toolName);
+}
 
 /** Opt-in only: an unset value leaves the hidden-thinking block untouched. */
 const THINKING_LABEL = process.env.COMPACT_STEPS_THINKING_LABEL?.trim() || undefined;
@@ -104,6 +110,14 @@ export function firstLine(text: string, max = MAX_DETAIL): string {
 	return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
+/** codemode wraps script output in a header; without this the header inflates every count. */
+const SCRIPT_HEADER = /^Script (?:completed|failed)\nWall time [\d.]+ seconds\nOutput:\n/;
+
+function resultText(toolName: string, result: any): string {
+	const text = textOf(result).trim();
+	return toolName === "codemode" ? text.replace(SCRIPT_HEADER, "") : text;
+}
+
 function textOf(result: any): string {
 	const content = Array.isArray(result?.content) ? result.content : [];
 	return content
@@ -141,6 +155,18 @@ export function durationSuffix(ms: number | undefined): string {
 
 function truncationNote(result: any): string {
 	return result?.details?.truncation?.truncated ? " [truncated]" : "";
+}
+
+/** Nested codemode calls; they never reach the model as tool rows, so the summary carries them. */
+function codemodeCalls(result: any): any[] {
+	const calls = result?.details?.calls;
+	return Array.isArray(calls) ? calls : [];
+}
+
+function codemodeCost(calls: any[]): string {
+	const total = calls.reduce((sum, call) => sum + (typeof call?.cost === "number" ? call.cost : 0), 0);
+	if (total <= 0) return "";
+	return ` · $${total >= 0.01 ? total.toFixed(2) : total.toPrecision(2)}`;
 }
 
 function expandHint(): string {
@@ -189,9 +215,20 @@ export function stepParts(toolName: string, args: any, cwd: string): Step {
 			};
 		case "ls":
 			return { label: "ls", detail: shortPath(a.path, cwd) || ".", note: "" };
+		case "codemode": {
+			// Skip @options/pragma comment lines; the first real statement says what the script does.
+			const line = str(a.code)
+				.split("\n")
+				.map((value) => value.trim())
+				.find((value) => value.length > 0 && !value.startsWith("//"));
+			return { label: "codemode", detail: firstLine(line ?? "..."), note: "" };
+		}
 		default: {
 			const first = Object.values(a).find((value) => typeof value === "string" && value.length > 0);
-			return { label: toolName, detail: first ? firstLine(str(first)) : "", note: "" };
+			if (first) return { label: toolName, detail: firstLine(str(first)), note: "" };
+			// Object-only args (mcp tools): a clipped JSON gives more than an empty detail.
+			const json = Object.keys(a).length > 0 ? JSON.stringify(a) : "";
+			return { label: toolName, detail: json ? firstLine(json) : "", note: "" };
 		}
 	}
 }
@@ -207,7 +244,7 @@ export function callLine(toolName: string, args: any, theme: any, ctx: ToolRende
 }
 
 export function summaryText(toolName: string, result: any, ctx: ToolRenderContext): string {
-	const text = textOf(result).trim();
+	const text = resultText(toolName, result);
 	if (ctx.isError) return firstLine(text) || "failed";
 
 	const duration = durationSuffix(ctx.durationMs);
@@ -251,6 +288,16 @@ export function summaryText(toolName: string, result: any, ctx: ToolRenderContex
 			const count = contentLines(text);
 			return `${count} entr${count === 1 ? "y" : "ies"}${truncationNote(result)}${duration}`;
 		}
+		case "codemode": {
+			const calls = codemodeCalls(result);
+			const failed = calls.filter((call) => call?.status === "error").length;
+			const lines = contentLines(text);
+			const parts: string[] = [];
+			if (calls.length > 0) parts.push(`${calls.length} call${calls.length === 1 ? "" : "s"}`);
+			if (failed > 0) parts.push(`${failed} failed`);
+			parts.push(lines === 0 ? "no output" : `${lines} line${lines === 1 ? "" : "s"}`);
+			return `${parts.join(" · ")}${codemodeCost(calls)}${duration}`;
+		}
 		default:
 			return firstLine(text) || "ok";
 	}
@@ -258,10 +305,19 @@ export function summaryText(toolName: string, result: any, ctx: ToolRenderContex
 
 export function resultLine(toolName: string, result: any, theme: any, ctx: ToolRenderContext): string {
 	const glyph = theme.fg("dim", glyphs.result);
-	if (ctx.isPartial) return `${glyph} ${theme.fg("muted", "running…")}`;
+	if (ctx.isPartial) {
+		// codemode streams its nested calls, so the running row can already count them.
+		const calls = codemodeCalls(result).length;
+		const progress = toolName === "codemode" && calls > 0 ? `${calls} call${calls === 1 ? "" : "s"} · ` : "";
+		return `${glyph} ${theme.fg("muted", `${progress}running…`)}`;
+	}
 
 	const summary = summaryText(toolName, result, ctx);
-	const tone = ctx.isError ? "error" : summary.includes("[truncated]") ? "warning" : "muted";
+	const tone = ctx.isError
+		? "error"
+		: summary.includes("[truncated]") || summary.includes(" failed")
+			? "warning"
+			: "muted";
 	return `${glyph} ${theme.fg(tone, summary)}`;
 }
 
@@ -325,7 +381,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerToolRenderer((toolName, next) => {
 		const base = next();
 		const hasOwnRenderers = !!(base?.renderCall || base?.renderResult);
-		if (!COMPACT_TOOLS.has(toolName) && hasOwnRenderers) return undefined;
+		if (!shouldCompact(toolName, hasOwnRenderers)) return undefined;
 
 		return {
 			// Own frame: no box padding, so a step is one or two lines.

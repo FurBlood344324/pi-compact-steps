@@ -13,7 +13,14 @@ pi's own renderer takes over — diff colors, syntax highlighting, full output.
  ⎿ +4 −2
  ⏺ bash bun test
  ⎿ 18 lines · 1.3s
+ ⏺ codemode const files = await tools.ls({ path: "src" });
+ ⎿ 3 calls · 2 lines · $0.00040 · 420ms
+ ⏺ mcp__jira__search {"query":"open bugs"}
+ ⎿ 5 lines
 ```
+
+Every tool is compacted — including `codemode` (nested calls, cost, output lines) and mcp tools — with a
+small keep list for rows that already carry their own state (`Agent` subagent stats, `question` options).
 
 While a tool runs, the status line above the editor shows the same step as one line, so nothing is
 appended to the transcript until the step finishes.
@@ -39,8 +46,8 @@ Remove with `pi remove <source>`, reload running sessions with `/reload`.
 | | |
 |---|---|
 | View only | Tool behavior, tool results and the model's context are untouched. |
-| Opt out per tool | Tools with their own renderer (`Agent`, `codemode`, `question`, mcp…) are left alone. |
-| Expanded view | Delegated to pi's built-in renderer, the extension never re-implements diffs or output. |
+| Everything is compacted | File/shell tools, `codemode`, mcp tools and anything else. Tools whose own row carries state (`Agent`, `question`) are left alone; see `COMPACT_STEPS_KEEP`. |
+| Expanded view | Delegated to pi's built-in renderer, the extension never re-implements diffs, script output or nested calls. |
 | Thinking block | Untouched unless you opt in (see below). |
 
 ## How it relates to pi's built-in rendering
@@ -61,13 +68,20 @@ All optional, via environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `COMPACT_STEPS_TOOLS` | `read,write,edit,bash,bash_exec,shell,powershell,grep,find,glob,ls` | Tools to compact. Tools outside the list are still compacted when they have no renderer of their own. |
+| `COMPACT_STEPS_KEEP` | `agent,question` | Tools left with their own renderer. An explicitly set value wins even when empty: `COMPACT_STEPS_KEEP=` compacts every tool, `COMPACT_STEPS_KEEP=agent,codemode` also leaves `codemode` alone. |
+| `COMPACT_STEPS_TOOLS` | unset | Opt-in allow-list. When set, only these tools (plus renderer-less tools) are compacted — the pre-0.2 behavior. |
 | `COMPACT_STEPS_GLYPHS` | `⏺,⎿` | Call and result glyphs (`bullet,result`), for terminals with poor glyph coverage. |
 | `COMPACT_STEPS_THINKING_LABEL` | unset | Opt-in: label used for the collapsed thinking block, e.g. `"✦ thinking…"`. Requires pi's `hideThinkingBlock` setting. Unset means the thinking block is never touched. |
 
 ```bash
 COMPACT_STEPS_GLYPHS="●,└" pi
 ```
+
+## What each summary counts
+
+`read` lines, `write` lines written, `edit` diff `+added −removed`, `bash` output lines, `grep` matches,
+`find` files, `ls` entries, `codemode` nested tool calls (+ failed ones, model-call cost) and output
+lines. Everything else shows its first output line; errored rows show the first line of the error.
 
 ## Compatibility
 
@@ -89,7 +103,7 @@ A `v*` tag is the only trigger:
 npm version patch --no-git-tag-version   # bump package.json
 # edit CHANGELOG-ish notes, commit
 git push
-git tag v0.1.1 && git push origin v0.1.1  # ← publishes
+git tag v0.2.0 && git push origin v0.2.0  # ← publishes
 ```
 
 The workflow (`.github/workflows/publish.yml`) fails if the tag and `package.json` version disagree,
